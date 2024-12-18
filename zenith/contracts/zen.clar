@@ -5,6 +5,7 @@
 (define-constant ERR-UNAUTHORIZED (err u100))
 (define-constant ERR-ALREADY-EXISTS (err u101))
 (define-constant ERR-NOT-FOUND (err u102))
+(define-constant ERR-MAX-CREDENTIALS (err u103))
 
 ;; Store user identity data
 (define-map user-identities 
@@ -40,18 +41,15 @@
   (let 
     (
       (current-identity (unwrap! (map-get? user-identities tx-sender) ERR-NOT-FOUND))
-      (updated-credentials 
-        (if (< (len (get credentials current-identity)) u10)
-          (append (get credentials current-identity) credential)
-          (get credentials current-identity)
-        )
-      )
+      (current-credentials (get credentials current-identity))
     )
+    ;; Check if max credentials reached
+    (asserts! (< (len current-credentials) u10) ERR-MAX-CREDENTIALS)
     
     ;; Update identity with new credential
     (map-set user-identities tx-sender 
       (merge current-identity {
-        credentials: updated-credentials,
+        credentials: (unwrap! (as-max-len? (append current-credentials credential) u10) ERR-MAX-CREDENTIALS),
         updated-at: block-height
       })
     )
@@ -74,3 +72,4 @@
     (is-some (index-of (get credentials identity) credential))
   )
 )
+
