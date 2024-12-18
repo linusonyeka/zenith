@@ -73,3 +73,15 @@
   )
 )
 
+;; Delete/revoke a user's decentralized identity
+(define-public (revoke-did)
+  (begin
+    ;; Check if DID exists
+    (asserts! (is-some (map-get? user-identities tx-sender)) ERR-NOT-FOUND)
+    
+    ;; Delete the identity entry
+    (map-delete user-identities tx-sender)
+    
+    (ok true)
+  )
+)
