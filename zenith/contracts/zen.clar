@@ -6,15 +6,19 @@
 (define-constant ERR-ALREADY-EXISTS (err u101))
 (define-constant ERR-NOT-FOUND (err u102))
 (define-constant ERR-MAX-CREDENTIALS (err u103))
+(define-constant ERR-ALREADY-DEACTIVATED (err u104))
+(define-constant ERR-DEACTIVATED (err u105))
 
-;; Store user identity data
+;; Store user identity data with revocation status
 (define-map user-identities 
   principal 
   {
     did: (string-ascii 100),
     credentials: (list 10 (string-ascii 200)),
     created-at: uint,
-    updated-at: uint
+    updated-at: uint,
+    is-active: bool,
+    revocation-reason: (optional (string-ascii 200))
   }
 )
 
@@ -29,7 +33,9 @@
       did: did,
       credentials: (list),
       created-at: block-height,
-      updated-at: block-height
+      updated-at: block-height,
+      is-active: true,
+      revocation-reason: none
     })
     
     (ok true)
@@ -41,15 +47,16 @@
   (let 
     (
       (current-identity (unwrap! (map-get? user-identities tx-sender) ERR-NOT-FOUND))
-      (current-credentials (get credentials current-identity))
     )
+    ;; Check if identity is active
+    (asserts! (get is-active current-identity) ERR-DEACTIVATED)
     ;; Check if max credentials reached
-    (asserts! (< (len current-credentials) u10) ERR-MAX-CREDENTIALS)
+    (asserts! (< (len (get credentials current-identity)) u10) ERR-MAX-CREDENTIALS)
     
     ;; Update identity with new credential
     (map-set user-identities tx-sender 
       (merge current-identity {
-        credentials: (unwrap! (as-max-len? (append current-credentials credential) u10) ERR-MAX-CREDENTIALS),
+        credentials: (unwrap! (as-max-len? (append (get credentials current-identity) credential) u10) ERR-MAX-CREDENTIALS),
         updated-at: block-height
       })
     )
@@ -63,17 +70,70 @@
   (map-get? user-identities user)
 )
 
-;; Verify a specific credential
-(define-read-only (verify-credential (user principal) (credential (string-ascii 200)))
-  (let 
-    (
-      (identity (unwrap! (map-get? user-identities user) false))
-    )
-    (is-some (index-of (get credentials identity) credential))
+;; Check if a DID is active
+(define-read-only (is-did-active (user principal))
+  (match (map-get? user-identities user)
+    identity (get is-active identity)
+    false
   )
 )
 
-;; Delete/revoke a user's decentralized identity
+;; Verify a specific credential for active DIDs only
+(define-read-only (verify-credential (user principal) (credential (string-ascii 200)))
+  (match (map-get? user-identities user)
+    identity (and 
+              (get is-active identity)
+              (is-some (index-of (get credentials identity) credential))
+            )
+    false
+  )
+)
+
+;; Deactivate a DID (temporary revocation)
+(define-public (deactivate-did (reason (optional (string-ascii 200))))
+  (let
+    (
+      (current-identity (unwrap! (map-get? user-identities tx-sender) ERR-NOT-FOUND))
+    )
+    ;; Check if already deactivated
+    (asserts! (get is-active current-identity) ERR-ALREADY-DEACTIVATED)
+    
+    ;; Update identity to deactivated state
+    (map-set user-identities tx-sender 
+      (merge current-identity {
+        is-active: false,
+        revocation-reason: reason,
+        updated-at: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Reactivate a deactivated DID
+(define-public (reactivate-did)
+  (let
+    (
+      (current-identity (unwrap! (map-get? user-identities tx-sender) ERR-NOT-FOUND))
+    )
+    ;; Check if already active
+    (asserts! (not (get is-active current-identity)) ERR-ALREADY-DEACTIVATED)
+    
+    ;; Update identity to active state
+    (map-set user-identities tx-sender 
+      (merge current-identity {
+        is-active: true,
+        revocation-reason: none,
+        updated-at: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Permanently delete/revoke a user's decentralized identity
 (define-public (revoke-did)
   (begin
     ;; Check if DID exists
@@ -94,11 +154,14 @@
 
 ;; Initiate transfer of DID ownership
 (define-public (initiate-transfer (new-owner principal))
-  (begin
-    ;; Check if sender has a DID
-    (asserts! (is-some (map-get? user-identities tx-sender)) ERR-NOT-FOUND)
+  (let
+    (
+      (current-identity (unwrap! (map-get? user-identities tx-sender) ERR-NOT-FOUND))
+    )
+    ;; Check if sender's DID is active
+    (asserts! (get is-active current-identity) ERR-DEACTIVATED)
     ;; Prevent transfer to self
-    (asserts! (not (is-eq tx-sender new-owner)) (err u104))
+    (asserts! (not (is-eq tx-sender new-owner)) (err u106))
     ;; Check if new owner already has a DID
     (asserts! (is-none (map-get? user-identities new-owner)) ERR-ALREADY-EXISTS)
     
@@ -118,6 +181,8 @@
     )
     ;; Verify sender is the pending new owner
     (asserts! (is-eq tx-sender pending-owner) ERR-UNAUTHORIZED)
+    ;; Check if the DID being transferred is active
+    (asserts! (get is-active identity) ERR-DEACTIVATED)
     
     ;; Transfer the identity to new owner
     (map-set user-identities tx-sender 
