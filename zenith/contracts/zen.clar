@@ -6,9 +6,13 @@
 ;; - Identity revocation (temporary and permanent)
 ;; - Ownership transfer with history tracking
 ;; - Active status tracking
+;; - Input validation and security checks
 
 ;; Constants
 (define-constant CONTRACT-OWNER tx-sender)
+(define-constant DID-PREFIX "did:stx:")
+(define-constant MIN-DID-LENGTH u20)
+(define-constant MAX-DID-LENGTH u100)
 
 ;; Error codes
 (define-constant ERR-UNAUTHORIZED (err u100))
@@ -22,6 +26,8 @@
 (define-constant ERR-TRANSFER-EXPIRED (err u108))
 (define-constant ERR-SELF-TRANSFER (err u109))
 (define-constant ERR-HISTORY-FULL (err u110))
+(define-constant ERR-INVALID-DID (err u111))
+(define-constant ERR-INVALID-CREDENTIAL (err u112))
 
 ;; Data Maps
 
@@ -58,6 +64,36 @@
   })
 )
 
+;; Input validation functions
+(define-read-only (is-valid-did (did (string-ascii 100)))
+  (let
+    (
+      (did-length (len did))
+    )
+    (and
+      ;; Check length constraints
+      (>= did-length MIN-DID-LENGTH)
+      (<= did-length MAX-DID-LENGTH)
+      ;; Verify prefix
+      (is-eq (slice? did u0 u8) (some DID-PREFIX))
+      ;; Additional checks could be added here
+    )
+  )
+)
+
+(define-read-only (is-valid-credential (credential (string-ascii 200)))
+  (let
+    (
+      (cred-length (len credential))
+    )
+    (and
+      (> cred-length u0)
+      (<= cred-length u200)
+      ;; Add additional credential format validation as needed
+    )
+  )
+)
+
 ;; Public Functions
 
 ;; DID Management
@@ -65,6 +101,7 @@
 ;; Create a new decentralized identity
 (define-public (create-did (did (string-ascii 100)))
   (begin
+    (asserts! (is-valid-did did) ERR-INVALID-DID)
     (asserts! (is-none (map-get? user-identities tx-sender)) ERR-ALREADY-EXISTS)
     
     (map-set user-identities tx-sender {
@@ -86,6 +123,7 @@
     (
       (current-identity (unwrap! (map-get? user-identities tx-sender) ERR-NOT-FOUND))
     )
+    (asserts! (is-valid-credential credential) ERR-INVALID-CREDENTIAL)
     (asserts! (get is-active current-identity) ERR-DEACTIVATED)
     (asserts! (< (len (get credentials current-identity)) u10) ERR-MAX-CREDENTIALS)
     
